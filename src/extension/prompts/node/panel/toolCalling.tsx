@@ -12,6 +12,7 @@ import { ITelemetryService } from '../../../../platform/telemetry/common/telemet
 import { ITokenizer } from '../../../../util/common/tokenizer';
 import { CancellationToken } from '../../../../util/vs/base/common/cancellation';
 import { toErrorMessage } from '../../../../util/vs/base/common/errorMessage';
+import { WebSocketService } from '../../../websocket/node/websocketService';
 import { isCancellationError } from '../../../../util/vs/base/common/errors';
 import { LanguageModelDataPart, LanguageModelPromptTsxPart, LanguageModelTextPart, LanguageModelToolResult } from '../../../../vscodeTypes';
 import { isImageDataPart } from '../../../conversation/common/languageModelChatMessageHelpers';
@@ -95,6 +96,19 @@ export class ChatToolCalls extends PromptElement<ChatToolCallsProps, void> {
 		// todo@connor4312: historical tool calls don't need to reserve and can all be flexed together
 		for (const [i, toolCall] of fixedNameToolCalls.entries()) {
 			const KeepWith = assistantToolCalls[i].keepWith;
+			console.log(`[TOOL CALL] name=${toolCall.name}, args=${toolCall.arguments}`);
+
+			// Stream tool call to WebSocket
+			const wsService = WebSocketService.getInstance();
+			if (wsService) {
+				wsService.broadcast({
+					type: 'tool_call',
+					timestamp: new Date().toISOString(),
+					name: toolCall.name,
+					arguments: toolCall.arguments
+				});
+			}
+
 			children.push(
 				<KeepWith priority={index} flexGrow={index + 1} flexReserve={`/${1 / reserve1N}`}>
 					<ToolResultElement
