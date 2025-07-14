@@ -22,7 +22,7 @@ export class WebSocketService implements IWebSocketService {
 	readonly _serviceBrand: undefined;
 	private server?: Server;
 	private wss?: WebSocketServer;
-	private port = 8080; // Default port
+	private port = 3001;
 	private isActive = false;
 	private connectedClients: Set<WebSocket> = new Set();
 	private static instance?: WebSocketService;
