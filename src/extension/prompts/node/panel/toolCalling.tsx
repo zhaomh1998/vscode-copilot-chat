@@ -40,6 +40,8 @@ const MAX_INPUT_VALIDATION_RETRIES = 5;
  * One assistant response "turn" which contains multiple rounds of assistant message text, tool calls, and tool results.
  */
 export class ChatToolCalls extends PromptElement<ChatToolCallsProps, void> {
+	private static sentToolCalls = new Set<string>();
+
 	constructor(
 		props: PromptElementProps<ChatToolCallsProps>,
 		@IToolsService private readonly toolsService: IToolsService,
@@ -98,15 +100,19 @@ export class ChatToolCalls extends PromptElement<ChatToolCallsProps, void> {
 			const KeepWith = assistantToolCalls[i].keepWith;
 			console.log(`[TOOL CALL] name=${toolCall.name}, args=${toolCall.arguments}`);
 
-			// Stream tool call to WebSocket
-			const wsService = WebSocketService.getInstance();
-			if (wsService) {
-				wsService.broadcast({
-					type: 'tool_call',
-					timestamp: new Date().toISOString(),
-					name: toolCall.name,
-					arguments: toolCall.arguments
-				});
+			// Stream tool call to WebSocket (only if not already sent)
+			if (toolCall.id && !ChatToolCalls.sentToolCalls.has(toolCall.id)) {
+				const wsService = WebSocketService.getInstance();
+				if (wsService) {
+					wsService.broadcast({
+						type: 'tool_call',
+						timestamp: new Date().toISOString(),
+						name: toolCall.name,
+						arguments: toolCall.arguments,
+						id: toolCall.id
+					});
+					ChatToolCalls.sentToolCalls.add(toolCall.id);
+				}
 			}
 
 			children.push(
