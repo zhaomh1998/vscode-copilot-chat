@@ -291,7 +291,7 @@ export class ChatMLFetcherImpl extends AbstractChatMLFetcher {
 						source: telemetryProperties.messageSource ?? 'unknown',
 						requestId: chatParams.ourRequestId,
 						model: chatEndpoint.model,
-						retryAfterFilterCategory: baseTelemetry?.properties.retryAfterFilterCategory ?? ''
+						...(telemetryProperties.retryAfterFilterCategory ? { retryAfterFilterCategory: telemetryProperties.retryAfterFilterCategory } : {}),
 					}, {
 						totalTokenMax: chatEndpoint.modelMaxPromptTokens ?? -1,
 						promptTokenCount: tokenCount,
@@ -427,7 +427,7 @@ export class ChatMLFetcherImpl extends AbstractChatMLFetcher {
 			source: telemetryProperties?.messageSource ?? 'unknown',
 			requestId: chatParams.ourRequestId,
 			model: chatEndpointInfo.model,
-			retryAfterFilterCategory: telemetryProperties?.retryAfterFilterCategory ?? ''
+			...(telemetryProperties?.retryAfterFilterCategory ? { retryAfterFilterCategory: telemetryProperties.retryAfterFilterCategory } : {})
 		}, {
 			totalTokenMax: chatEndpointInfo.modelMaxPromptTokens ?? -1,
 			promptTokenCount: tokenCount,
@@ -484,7 +484,7 @@ export class ChatMLFetcherImpl extends AbstractChatMLFetcher {
 				initiatorType: userInitiatedRequest ? 'user' : 'agent',
 				model: chatEndpointInfo?.model,
 				requestId,
-				retryAfterFilterCategory: baseTelemetry?.properties.retryAfterFilterCategory ?? '',
+				...(baseTelemetry?.properties.retryAfterFilterCategory ? { retryAfterFilterCategory: baseTelemetry.properties.retryAfterFilterCategory } : {}),
 			}, {
 				totalTokenMax: chatEndpointInfo?.modelMaxPromptTokens ?? -1,
 				tokenCountMax: maxResponseTokens,
