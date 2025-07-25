@@ -11,7 +11,7 @@ import { FilterReason } from '../../../platform/networking/common/openai';
 import { IThinkingDataService } from '../../../platform/thinking/node/thinkingDataService';
 import { CancellationToken } from '../../../util/vs/base/common/cancellation';
 import { URI } from '../../../util/vs/base/common/uri';
-import { ChatResponseClearReason } from '../../../vscodeTypes';
+import { ChatResponseClearToPreviousToolInvocationReason } from '../../../vscodeTypes';
 import { getContributedToolName } from '../../tools/common/toolNames';
 import { IResponseProcessor, IResponseProcessorContext } from './intents';
 
@@ -156,9 +156,9 @@ export class PseudoStopStartResponseProcessor implements IResponseProcessor {
 			this.currentStartStop = undefined;
 			this.nonReportedDeltas = [];
 			if (delta.retryReason === FilterReason.Copyright) {
-				progress.clear(ChatResponseClearReason.CopyrightContentRetry);
+				progress.clearToPreviousToolInvocation(ChatResponseClearToPreviousToolInvocationReason.CopyrightContentRetry);
 			} else {
-				progress.clear(ChatResponseClearReason.FilteredContentRetry);
+				progress.clearToPreviousToolInvocation(ChatResponseClearToPreviousToolInvocationReason.FilteredContentRetry);
 			}
 			return;
 		}
