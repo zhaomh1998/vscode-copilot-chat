@@ -12,7 +12,7 @@ import { ChatFetchError, ChatFetchResponseType, ChatFetchRetriableError, ChatLoc
 import { IConversationOptions } from '../../../platform/chat/common/conversationOptions';
 import { getTextPart, toTextParts } from '../../../platform/chat/common/globalStringUtils';
 import { IInteractionService } from '../../../platform/chat/common/interactionService';
-import { HARD_TOOL_LIMIT } from '../../../platform/configuration/common/configurationService';
+import { ConfigKey, HARD_TOOL_LIMIT, IConfigurationService } from '../../../platform/configuration/common/configurationService';
 import { ICAPIClientService } from '../../../platform/endpoint/common/capiClient';
 import { IDomainService } from '../../../platform/endpoint/common/domainService';
 import { IEnvService } from '../../../platform/env/common/envService';
@@ -23,6 +23,7 @@ import { IChatEndpoint } from '../../../platform/networking/common/networking';
 import { ChatCompletion, FilterReason, FinishedCompletionReason, rawMessageToCAPI } from '../../../platform/networking/common/openai';
 import { ChatFailKind, ChatParams, ChatRequestCanceled, ChatRequestFailed, ChatResults, fetchAndStreamChat, FetchResponseKind } from '../../../platform/openai/node/fetch';
 import { IRequestLogger } from '../../../platform/requestLogger/node/requestLogger';
+import { IExperimentationService } from '../../../platform/telemetry/common/nullExperimentationService';
 import { ITelemetryService, TelemetryProperties } from '../../../platform/telemetry/common/telemetry';
 import { TelemetryData } from '../../../platform/telemetry/common/telemetryData';
 import { calculateLineRepetitionStats, isRepetitive } from '../../../util/common/anomalyDetection';
@@ -126,6 +127,8 @@ export class ChatMLFetcherImpl extends AbstractChatMLFetcher {
 		@IInteractionService private readonly _interactionService: IInteractionService,
 		@IChatQuotaService private readonly _chatQuotaService: IChatQuotaService,
 		@IConversationOptions options: IConversationOptions,
+		@IConfigurationService private readonly configurationService: IConfigurationService,
+		@IExperimentationService private readonly experimentationService: IExperimentationService,
 	) {
 		super(options);
 	}
@@ -520,16 +523,28 @@ export class ChatMLFetcherImpl extends AbstractChatMLFetcher {
 
 		const result = completions.at(0);
 
+		const isRetryAfterFilteredResponseEnabled = this.configurationService.getExperimentBasedConfig(ConfigKey.EnableRetryAfterFilteredResponse, this.experimentationService);
+
 		switch (result?.finishReason) {
 			case FinishedCompletionReason.ContentFilter:
-				return {
-					type: ChatFetchResponseType.FilteredRetry,
-					category: result.filterReason ?? FilterReason.Copyright,
-					reason: 'Response got filtered.',
-					value: completions.map(c => getTextPart(c.message.content)),
-					requestId: requestId,
-					serverRequestId: result.requestId.headerRequestId,
-				};
+				if (isRetryAfterFilteredResponseEnabled) {
+					return {
+						type: ChatFetchResponseType.FilteredRetry,
+						category: result.filterReason ?? FilterReason.Copyright,
+						reason: 'Response got filtered.',
+						value: completions.map(c => getTextPart(c.message.content)),
+						requestId: requestId,
+						serverRequestId: result.requestId.headerRequestId,
+					};
+				} else {
+					return {
+						type: ChatFetchResponseType.Filtered,
+						category: result.filterReason ?? FilterReason.Copyright,
+						reason: 'Response got filtered.',
+						requestId: requestId,
+						serverRequestId: result.requestId.headerRequestId
+					};
+				}
 			case FinishedCompletionReason.Length:
 				return {
 					type: ChatFetchResponseType.Length,
