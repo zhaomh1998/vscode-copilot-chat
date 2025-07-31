@@ -68,7 +68,7 @@
 		]
 	},
 	"github.copilot.viewsWelcome.debug": {
-		"message": "Debug with [terminal commands](command:github.copilot.chat.startCopilotDebugCommand) or in an [interactive chat](command:workbench.action.chat.open?%7B%22query%22%3A%22%40vscode%20%2FstartDebugging%20%22%2C%22isPartialQuery%22%3Atrue%7D).",
+		"message": "Debug using a [terminal command](command:github.copilot.chat.startCopilotDebugCommand) or in an [interactive chat](command:workbench.action.chat.open?%7B%22query%22%3A%22%40vscode%20%2FstartDebugging%20%22%2C%22isPartialQuery%22%3Atrue%7D).",
 		"comment": [
 			"{Locked='['}",
 			"{Locked='](command:github.copilot.chat.startCopilotDebugCommand)'}",
