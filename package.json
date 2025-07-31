@@ -2738,7 +2738,7 @@
 					},
 					"github.copilot.chat.enableRetryAfterFilteredResponse": {
 						"type": "boolean",
-						"default": true,
+						"default": false,
 						"tags": [
 							"experimental"
 						],
