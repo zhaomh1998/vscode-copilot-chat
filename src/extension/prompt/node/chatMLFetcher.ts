@@ -256,7 +256,7 @@ export class ChatMLFetcherImpl extends AbstractChatMLFetcher {
 
 								// Retry with augmented messages
 								const retryResult = await this.fetchMany(
-									debugName,
+									'retry-' + debugName,
 									augmentedMessages,
 									finishedCb,
 									token,
