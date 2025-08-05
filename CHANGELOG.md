@@ -2,7 +2,254 @@
 
 GitHub Copilot updates from [July 2025](https://code.visualstudio.com/updates/v1_103):
 
+### Chat
 
+#### Chat checkpoints
+
+**Setting**: `chat.checkpoints.enabled`
+
+We've introduced checkpoints that enable you to restore different states of your chat conversations. You can easily revert edits and go back to certain points in your chat conversation. This can be particularly useful if multiple files were changed in a chat session.
+
+When you select a checkpoint, VS Code reverts workspace changes and the chat history to that point. After restoring a checkpoint, you can redo that action as well!
+
+<video src="https://code.visualstudio.com/assets/updates/1_103/chat-checkpoints.mp4" title="Video that shows creating and managing chat checkpoints." autoplay loop controls muted></video>
+
+Checkpoints will be enabled by default and can be controlled with `chat.checkpoints.enabled`.
+
+#### Tool picker improvements
+
+We've totally revamped the tool picker this iteration and adopted a new component called Quick Tree to display all the tools.
+
+![Screenshot showing the new tool picker using a quick tree, enabling collapsing and expanding nodes.](https://code.visualstudio.com/assets/updates/1_103/tool-picker-quick-tree.png)
+
+Notable features:
+
+* Expand or collapse tool sets, MCP servers, extension contributed tools, and more
+* Configuration options moved to the title bar
+* Sticky scrolling
+* Icon rendering
+
+Let us know what you think!
+
+#### Tool grouping (Experimental)
+
+**Setting**: `github.copilot.chat.virtualTools.threshold`
+
+The maximum number of tools that you can use for a single chat request is currently 128. Previously, you could quickly reach this limit by installing MCP servers with many tools, requiring you to deselect some tools in order to proceed.
+
+In this release of VS Code, we have enabled an experimental tool-calling mode for when the number of tools exceeds the maximum limit. Tools are automatically grouped and the model is given the ability to activate and call groups of tools.
+
+This behavior, including the threshold, is configurable via the setting `github.copilot.chat.virtualTools.threshold`.
+
+#### Terminal auto-approve improvements
+
+**Setting**: `chat.tools.terminal.autoApprove`
+
+Early terminal auto-approve settings were introduced last month. This release, the feature got many improvements. Learn more about [terminal auto-approval](https://code.visualstudio.com/docs/copilot/chat/chat-agent-mode#_autoapprove-terminal-commands-experimental) in our documentation.
+
+- We merged the `allowList` and `denyList` settings into the `chat.tools.terminal.autoApprove` setting. If you were using the old settings, you should see a warning asking you to migrate to the new setting.
+- Regular expression matchers now support flags. This allows case insensitivity, for example in PowerShell, where case often doesn't matter:
+
+    ```jsonc
+    "chat.tools.terminal.autoApprove": {
+      // Deny any `Remove-Item` command, regardless of case
+      "/^Remove-Item\\b/i": false
+    }
+    ```
+
+- There was some confusion around how the sub-command matching works, this is now explained in detail in the setting's description, but we also support matching against the complete command line.
+
+    ```jsonc
+    "chat.tools.terminal.autoApprove": {
+      // Deny any _command line_ containing a reference to what is likely a PowerShell script
+      "/\\.ps1\\b/i": { approve: false, matchCommandLine: true }
+    }
+    ```
+
+- The auto approve reasoning is now logged to the Terminal Output channel. We plan to [surface this in the UI soon](https://github.com/microsoft/vscode/issues/256780).
+
+#### Improved model management experience
+
+This iteration, we've revamped the chat provider API, which is responsible for language model access. Users are now able to select which models appear in their model picker, creating a more personalized and focused experience.
+
+![Screenshot of the model picker showing various models from providers such as Copilot and OpenRouter](https://code.visualstudio.com/assets/updates/1_103/modelpicker.png)
+
+We plan to finalize this new API in the coming months and would appreciate any feedback. Finalization of this API will open up the extension ecosystem to implement their own model providers and further expand the bring your own key offering.
+
+#### Azure DevOps repos remote index support
+
+The [`#codebase` tool](https://code.visualstudio.com/docs/copilot/chat/copilot-chat-context#_perform-a-codebase-search) now supports remote indexes for workspaces that are linked to Azure DevOps repos. This enables `#codebase` to search for relevant snippets almost instantly without any initialization. This even works for larger repos with tens of thousands of indexable files. Previously, this feature only worked with GitHub linked repos.
+
+Remote indexes are used automatically when working in a workspace that is linked to Azure DevOps through git. Make sure you are also logged into VS Code with the Microsoft account you use to access the Azure DevOps repos.
+
+We're gradually rolling out support for this feature on the services side, so not every organization might be able to use it initially. Based on the success of the rollout, we hope to turn on remote indexing for Azure DevOps for as many organizations as possible.
+
+#### Improved reliability and performance of the run in terminal and task tools
+
+We have migrated the tools for running tasks and commands within the terminal from the Copilot extension into the core [microsoft/vscode repository](https://github.com/microsoft/vscode). This gives the tools access to lower-level and richer APIs, allowing us to fix many of the terminal hanging issues. This update also comes with the benefit of more easily implementing features going forward, as we're no longer restricted to the capabilities of the extension API, especially any changes that need custom UI within the Chat view.
+
+#### Warning about no shell integration when using chat
+
+While we strive to allow agent mode to run commands in terminals without shell integration, the experience will always be inferior as the terminal is essentially a black box at that point. Examples of issues that can occur without shell integration are: no exit code reporting and the inability to differentiate between a command idling and a prompt idling, resulting in output possibly not being reported to the agent.
+
+When the `run in terminal` tool is used but [shell integration](https://code.visualstudio.com/docs/terminal/shell-integration) is not detected, a message is displayed calling this out and pointing at the documentation.
+
+![Screenshot of a message in the Chat view saying "Enable shell integration to improve command detection".](https://code.visualstudio.com/assets/updates/1_103/terminal-chat-si-none.png)
+
+#### Output polling for tasks and terminals
+
+The agent now waits for tasks and background terminals to complete before proceeding by using output polling. If a process takes longer than 20 seconds, you are prompted to continue waiting or move on. The agent will monitor the process for up to two minutes, summarizing the current state or reporting if the process is still running. This improves reliability when running long or error-prone commands in chat.
+
+#### Task awareness improvement
+
+Previously, the agent could only monitor active tasks. Now, it can track and analyze the output of both active and completed tasks, including those that have failed or finished running. This enhancement enables better troubleshooting and more comprehensive insights into task execution history.
+
+#### Agent awareness of user created terminals
+
+The agent now maintains awareness of all user-created terminals in the workspace. This enables it to track recent commands and access terminal output, providing better context for assisting with terminals and troubleshooting.
+
+#### Terminal inline chat improvements
+
+Terminal inline chat now better detects your active shell, even when working within subshells (for example, launching Python or Node from PowerShell or zsh). This dynamic shell detection improves the accuracy of inline chat responses by providing more relevant command suggestions for your current shell type.
+
+![Screenshot of terminal inline chat showing node specific suggestions.](https://code.visualstudio.com/assets/updates/1_103/hello_node.png)
+
+#### Improved test runner tool
+
+The test runner tool has been reworked. It now shows progress inline within chat, and numerous bugs in the tool have been fixed.
+
+#### Edit previous requests
+
+**Setting**: `chat.editRequests`
+
+Last iteration, we enabled users to edit previous requests and rolled out a few different access points. This iteration, we've made inline edits the default behavior. Click on the request bubble to begin editing that request. You can modify attachments, change the mode and model, and resend your request with modified text.
+
+<video src="https://code.visualstudio.com/assets/updates/1_103/chat-previous-edits.mp4" title="Video that shows editing a previous chat request inline in the Chat view." autoplay loop controls muted></video>
+
+You can control the chat editing behavior with the `chat.editRequests` setting if you prefer editing via the toolbar hovers above each request.
+
+#### Open chat as maximized
+
+**Setting**: `workbench.secondarySideBar.defaultVisibility`
+
+We added two extra options for configuring the default visibility of the Secondary Side Bar to open it as maximized:
+
+* `maximizedInWorkspace`: open the Chat view as maximized when opening a new workspace
+* `maximized`: open the Chat view always as maximized, including in empty windows
+
+![Screenshot that shows the Chat view maximized.](https://code.visualstudio.com/assets/updates/1_103/max-chat.png)
+
+#### Pending chat confirmation
+
+To help prevent accidentally closing a workspace where an agent session is actively changing files or responding to your request, we now show a dialog when you try to quit VS Code or close its window when a chat response is in progress:
+
+![Screenshot of confirmation to exit with running chat.](https://code.visualstudio.com/assets/updates/1_103/confirm-chat-exit.png)
+
+#### OS notification on user action
+
+**Setting**: `chat.notifyWindowOnConfirmation`
+
+We now leverage the OS native notification system to show a toast when user confirmation is needed within a chat session. Enable this behavior with the `chat.notifyWindowOnConfirmation`.
+
+![Screenshot of toast for confirmation of a chat agent.](https://code.visualstudio.com/assets/updates/1_103/chat-toast.png)
+
+We plan to improve this experience in the future to allow for displaying more information and for allowing you to approve directly from the toast. For now, selecting the toast focuses the window where the confirmation originated from.
+
+#### Math support in chat (Preview)
+
+**Setting**: `chat.math.enabled`
+
+Chats now have initial support for rendering mathematical equations in responses:
+
+![Screenshot of the Chat view, showing inline and block equations in a chat response.](https://code.visualstudio.com/assets/updates/1_103/chat-math.png)
+
+This feature is powered by [KaTeX](https://katex.org) and supports both inline and block math equations. Inline math equations can be written by wrapping the markup in single dollar signs (`$...$`), while block math equations use two dollar signs (`$$...$$`).
+
+Math rendering can be enabled using `chat.math.enabled`. Currently, it is off by default but we plan to enable it in a future release, after further testing.
+
+#### Context7 integration for project scaffolding (Experimental)
+
+**Setting**: `github.copilot.chat.newWorkspace.useContext7`
+
+When you scaffold a new project with `#new` in chat, you can now make sure that it uses the latest documentation and APIs from **Context7**, if you have already installed the Context7 MCP server.
+
+### MCP
+
+#### Server autostart and trust
+
+**Setting**: `chat.mcp.autostart:newAndOutdated`
+
+Previously, when you added or updated an MCP server configuration, VS Code would show a blue "refresh" icon in the Chat view, enabling you to manually refresh the list of tools. In the milestone, you can now configure the auto-start behavior for MCP servers, so you no longer have to manually restart the MCP server.
+
+Use the `chat.mcp.autostart:newAndOutdated` setting to control this behavior. You can also change this setting within the icon's tooltip and see which servers will be started:
+
+![Screenshot showing the hover of the refresh MCP server icon, enabling you to configure the auto-start behavior.](https://code.visualstudio.com/assets/updates/1_103/mcp-refresh-tip.png)
+
+The first time an MCP server is started after being updated or changed, we now show a dialog asking you to trust the server. Giving trust to these servers is particularly important with autostart turned on to running undesirable commands unknowingly.
+
+Learn more about [using MCP servers in VS Code](https://code.visualstudio.com/docs/copilot/chat/mcp-servers) in our documentation.
+
+#### Client credentials flow for remote MCP servers
+
+The ideal flow for a remote MCP server that wants to support authentication is to use an auth provider that supports Dynamic Client Registration (DCR). This enables the client (VS Code) to register itself with that auth provider, so the auth flow is seamless.
+
+However, not every auth provider supports DCR, so we introduced a client-credentials flow that enables you to supply your own client ID and (optionally) client secret that will be used when taking you through the auth provider's auth flow. Here's what that looks like:
+
+* Step 1: VS Code detects that DCR can't be used, and asks if you want to do the client credentials flow:
+
+    ![Screenshot of a modal dialog saying that DCR is not supported but you can provide client credentials manually.](https://code.visualstudio.com/assets/updates/1_103/mcp-auth-no-dcr1.png)
+
+    > **IMPORTANT**: At this point, you would go to the auth provider's website and manually create an application registration. There you will put in the redirect URIs mentioned in the modal dialog.
+
+* Step 2: From the auth provider's portal, you will get a client ID and maybe a client secret. You'll put the client ID in the input box that appears and hit <kbd>Enter</kbd>:
+
+    ![Screenshot of an input box to provide the client ID for the MCP server.](https://code.visualstudio.com/assets/updates/1_103/mcp-auth-no-dcr2.png)
+
+* Step 3: Then you'll put in the client secret if you have one, and hit <kbd>Enter</kbd> (leave blank if you don't have one)
+
+    ![Screenshot of an input box to provide the optional client secret for the MCP server.](https://code.visualstudio.com/assets/updates/1_103/mcp-auth-no-dcr3.png)
+
+    At that point, you'll be taken through the typical auth flow to authenticate the MCP server you're working with.
+
+#### Remove dynamic auth provider from Account menu
+
+Since the addition of remote MCP authentication, there has been a command available in the Command Palette called **Authentication: Remove Dynamic Authentication Providers**, which enables you to remove client credentials (client ID and, if available, a client secret) and all account information associated with that provider.
+
+We've now exposed this command in the Account menu. You can find it inside of an MCP server account:
+
+![Screenshot of the Account menu showing the manage dynamic auth option in an account's submenu.](https://code.visualstudio.com/assets/updates/1_103/mcp-remove-dynamic-auth1.png)
+
+or at the root of the menu if you don't have any MCP server accounts yet:
+
+![Screenshot of the Account menu showing the manage dynamic auth option in the root of account menu.](https://code.visualstudio.com/assets/updates/1_103/mcp-remove-dynamic-auth2.png)
+
+#### Support for `resource_link` and structured output
+
+VS Code now fully supports the latest MCP specification, version `2025-06-18`, with support for `resource_link`s and structured output in tool results.
+
+### Editor Experience
+
+#### AI statistics (Preview)
+
+**Setting**: `editor.aiStats.enabled:true`
+
+We added an experimental feature for displaying basic AI statistics. Use the `editor.aiStats.enabled:true` to enable this feature, which is disabled by default.
+
+This feature shows you, per project, the percentage of characters that was inserted by AI versus inserted by typing. It also keeps track of how many inline and next edit suggestions you accepted during the current day.
+
+![Screenshot showing the AI statistic hover information in the Status Bar.](https://code.visualstudio.com/assets/updates/1_103/ai-stats.png)
+
+### Notebooks
+
+#### Notebook inline chat with agent tools
+
+**Setting**: `inlineChat.notebookAgent:true`
+
+The notebook inline chat control can now use the full suite of notebook agent tools to enable additional capabilities like running cells and installing packages into the kernel.
+
+<video src="https://code.visualstudio.com/assets/updates/1_103/notebook-inline-agent.mp4" title="Video showing a coding agent session opening in a chat session editor." autoplay loop controls muted></video>
+
+To enable agent tools in notebooks, enable the new experimental setting `inlineChat.notebookAgent:true`. This also currently requires enabling the setting for inline chat v2 `inlineChat.enableV2:true`.
 
 
 ## 0.29 (2025-07-09)
@@ -158,7 +405,7 @@ You can toggle in and out of the maximized state by using the new icon next to t
 
 We now show a badge over the application icon in the dock when the window is not focused and the agent needs user confirmation to continue. The badge will disappear as soon as the related window that triggered it receives focus.
 
-![Screenshot of the VS Code dock icon showing an agent confirmation as a badge.](./images/1_102/badge.png)
+![Screenshot of the VS Code dock icon showing an agent confirmation as a badge.](https://code.visualstudio.com/assets/updates/1_102/badge.png)
 
 You can enable or disable this badge via the `chat.notifyWindowOnConfirmation` setting.
 
