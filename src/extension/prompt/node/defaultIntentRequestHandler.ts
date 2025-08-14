@@ -43,6 +43,7 @@ import { SummarizedConversationHistoryMetadata } from '../../prompts/node/agent/
 import { normalizeToolSchema } from '../../tools/common/toolSchemaNormalizer';
 import { ToolCallCancelledError } from '../../tools/common/toolsService';
 import { IToolGrouping, IToolGroupingService } from '../../tools/common/virtualTools/virtualToolTypes';
+import { WebSocketService } from '../../websocket/node/websocketService';
 import { Conversation, getUniqueReferences, GlobalContextMessageMetadata, IResultMetadata, RenderedUserMessageMetadata, RequestDebugInformation, ResponseStreamParticipant, Turn, TurnStatus } from '../common/conversation';
 import { IBuildPromptContext, IToolCallRound } from '../common/intents';
 import { ChatTelemetry, ChatTelemetryBuilder } from './chatParticipantTelemetry';
@@ -415,11 +416,26 @@ export class DefaultIntentRequestHandler {
 
 	private async processResult(fetchResult: ChatResponse, responseMessage: string, chatResult: ChatResult | void, metadataFragment: Partial<IResultMetadata>, baseModelTelemetry: ConversationalBaseTelemetryData, rounds: IToolCallRound[]): Promise<ChatResult> {
 		switch (fetchResult.type) {
-			case ChatFetchResponseType.Success:
+			case ChatFetchResponseType.Success: {
+				console.log(`[MESSAGE-Success] ${responseMessage}`);
+
+				// Stream success message to WebSocket
+				const wsService = WebSocketService.getInstance();
+				if (wsService) {
+					wsService.broadcast({
+						type: 'message_success',
+						timestamp: new Date().toISOString(),
+						content: responseMessage
+					});
+				}
+
 				return await this.processSuccessfulFetchResult(responseMessage, fetchResult.requestId, chatResult ?? {}, baseModelTelemetry, rounds);
+			}
 			case ChatFetchResponseType.OffTopic:
+				console.log(`[MESSAGE-OffTopic] ${responseMessage}`);
 				return this.processOffTopicFetchResult(baseModelTelemetry);
 			case ChatFetchResponseType.Canceled: {
+				console.log(`[MESSAGE-Canceled] ${responseMessage}`);
 				const errorDetails = getErrorDetailsFromChatFetchError(fetchResult, (await this._authenticationService.getCopilotToken()).copilotPlan);
 				const chatResult = { errorDetails, metadata: metadataFragment };
 				this.turn.setResponse(TurnStatus.Cancelled, { message: errorDetails.message, type: 'user' }, baseModelTelemetry.properties.messageId, chatResult);
@@ -427,6 +443,7 @@ export class DefaultIntentRequestHandler {
 			}
 			case ChatFetchResponseType.QuotaExceeded:
 			case ChatFetchResponseType.RateLimited: {
+				console.log(`[MESSAGE-Quota] ${responseMessage}`);
 				const errorDetails = getErrorDetailsFromChatFetchError(fetchResult, (await this._authenticationService.getCopilotToken()).copilotPlan, this.handlerOptions.hideRateLimitTimeEstimate);
 				const chatResult = { errorDetails, metadata: metadataFragment };
 				this.turn.setResponse(TurnStatus.Error, undefined, baseModelTelemetry.properties.messageId, chatResult);
@@ -435,12 +452,14 @@ export class DefaultIntentRequestHandler {
 			case ChatFetchResponseType.BadRequest:
 			case ChatFetchResponseType.NetworkError:
 			case ChatFetchResponseType.Failed: {
+				console.log(`[MESSAGE-Failed] ${responseMessage}`);
 				const errorDetails = getErrorDetailsFromChatFetchError(fetchResult, (await this._authenticationService.getCopilotToken()).copilotPlan);
 				const chatResult = { errorDetails, metadata: metadataFragment };
 				this.turn.setResponse(TurnStatus.Error, { message: errorDetails.message, type: 'server' }, baseModelTelemetry.properties.messageId, chatResult);
 				return chatResult;
 			}
 			case ChatFetchResponseType.Filtered: {
+				console.log(`[MESSAGE-Filtered] ${responseMessage}`);
 				const errorDetails = getErrorDetailsFromChatFetchError(fetchResult, (await this._authenticationService.getCopilotToken()).copilotPlan);
 				const chatResult = { errorDetails, metadata: { ...metadataFragment, filterReason: fetchResult.category } };
 				this.turn.setResponse(TurnStatus.Filtered, undefined, baseModelTelemetry.properties.messageId, chatResult);
@@ -453,17 +472,20 @@ export class DefaultIntentRequestHandler {
 				return chatResult;
 			}
 			case ChatFetchResponseType.AgentUnauthorized: {
+				console.log(`[MESSAGE-AgentUnauthorized] ${responseMessage}`);
 				const chatResult = {};
 				this.turn.setResponse(TurnStatus.Error, undefined, baseModelTelemetry.properties.messageId, chatResult);
 				return chatResult;
 			}
 			case ChatFetchResponseType.AgentFailedDependency: {
+				console.log(`[MESSAGE-AgentFailedDependency] ${responseMessage}`);
 				const errorDetails = getErrorDetailsFromChatFetchError(fetchResult, (await this._authenticationService.getCopilotToken()).copilotPlan);
 				const chatResult = { errorDetails, metadata: metadataFragment };
 				this.turn.setResponse(TurnStatus.Error, undefined, baseModelTelemetry.properties.messageId, chatResult);
 				return chatResult;
 			}
 			case ChatFetchResponseType.Length: {
+				console.log(`[MESSAGE-Length] ${responseMessage}`);
 				const errorDetails = getErrorDetailsFromChatFetchError(fetchResult, (await this._authenticationService.getCopilotToken()).copilotPlan);
 				const chatResult = { errorDetails, metadata: metadataFragment };
 				this.turn.setResponse(TurnStatus.Error, undefined, baseModelTelemetry.properties.messageId, chatResult);
@@ -471,12 +493,14 @@ export class DefaultIntentRequestHandler {
 			}
 			case ChatFetchResponseType.NotFound: // before we had `NotFound`, it would fall into Unknown, so behavior should be consistent
 			case ChatFetchResponseType.Unknown: {
+				console.log(`[MESSAGE-Unknown] ${responseMessage}`);
 				const errorDetails = getErrorDetailsFromChatFetchError(fetchResult, (await this._authenticationService.getCopilotToken()).copilotPlan);
 				const chatResult = { errorDetails, metadata: metadataFragment };
 				this.turn.setResponse(TurnStatus.Error, undefined, baseModelTelemetry.properties.messageId, chatResult);
 				return chatResult;
 			}
 			case ChatFetchResponseType.ExtensionBlocked: {
+				console.log(`[MESSAGE-ExtensionBlocked] ${responseMessage}`);
 				const errorDetails = getErrorDetailsFromChatFetchError(fetchResult, (await this._authenticationService.getCopilotToken()).copilotPlan);
 				const chatResult = { errorDetails, metadata: metadataFragment };
 				// This shouldn't happen, only 3rd party extensions should be blocked
