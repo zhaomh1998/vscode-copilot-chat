@@ -42,6 +42,7 @@ import { InlineCompletionContribution } from '../../typescriptContext/vscode-nod
 import * as workspaceChunkSearchContribution from '../../workspaceChunkSearch/node/workspaceChunkSearch.contribution';
 import * as workspaceIndexingContribution from '../../workspaceChunkSearch/vscode-node/workspaceChunkSearch.contribution';
 import { WorkspaceRecorderFeature } from '../../workspaceRecorder/vscode-node/workspaceRecorderFeature';
+import { WebSocketContribution } from '../../websocket/vscode-node/websocket.contribution';
 import vscodeContributions from '../vscode/contributions';
 
 // ###################################################################################################
@@ -74,6 +75,7 @@ export const vscodeNodeContributions: IExtensionContributionFactory[] = [
 	asContributionFactory(ChatQuotaContribution),
 	asContributionFactory(NotebookFollowCommands),
 	asContributionFactory(PromptFileContextContribution),
+	asContributionFactory(WebSocketContribution),
 	workspaceIndexingContribution,
 ];
 
