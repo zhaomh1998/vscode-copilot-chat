@@ -32,6 +32,7 @@ import { IBuildPromptContext, IToolCallRound } from '../../../prompt/common/inte
 import { ToolName } from '../../../tools/common/toolNames';
 import { normalizeToolSchema } from '../../../tools/common/toolSchemaNormalizer';
 import { NotebookSummary } from '../../../tools/node/notebookSummaryTool';
+import { WebSocketService } from '../../../websocket/node/websocketService';
 import { renderPromptElement } from '../base/promptRenderer';
 import { Tag } from '../base/tag';
 import { ChatToolCalls } from '../panel/toolCalling';
@@ -399,6 +400,15 @@ class ConversationHistorySummarizer {
 		const propsInfo = this.instantiationService.createInstance(SummarizedConversationHistoryPropsBuilder).getProps(this.props);
 
 		const summaryPromise = this.getSummaryWithFallback(propsInfo);
+		// Stream please wait message to WebSocket
+		const wsService = WebSocketService.getInstance();
+		if (wsService) {
+			wsService.broadcast({
+				type: 'status_update',
+				timestamp: new Date().toISOString(),
+				content: `Please wait`
+			});
+		}
 		this.progress?.report(new ChatResponseProgressPart2(l10n.t('Summarizing conversation history...'), async () => {
 			try {
 				await summaryPromise;
