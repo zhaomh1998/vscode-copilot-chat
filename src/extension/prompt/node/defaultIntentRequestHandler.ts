@@ -261,6 +261,19 @@ export class DefaultIntentRequestHandler {
 
 	private async _onDidReceiveResponse({ response, toolCalls, interactionOutcome }: IToolCallingResponseEvent) {
 		const responseMessage = (response.type === ChatFetchResponseType.Success ? response.value : '');
+		if (toolCalls.length > 0 && responseMessage.length > 0) {
+			// Filter out result (final) message
+			console.log(`[Message-Intermediate] ${responseMessage}`);
+			// Stream intemediate message to WebSocket
+			const wsService = WebSocketService.getInstance();
+			if (wsService) {
+				wsService.broadcast({
+					type: 'status_update',
+					timestamp: new Date().toISOString(),
+					content: `${responseMessage}`
+				});
+			}
+		}
 		await this._loop.telemetry.sendTelemetry(response.requestId, response.type, responseMessage, interactionOutcome.interactionOutcome, toolCalls);
 
 		if (this.documentContext) {
