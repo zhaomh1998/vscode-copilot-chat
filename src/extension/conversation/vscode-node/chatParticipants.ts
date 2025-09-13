@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 import * as vscode from 'vscode';
 import { IAuthenticationService } from '../../../platform/authentication/common/authentication';
-import { IChatAgentService, defaultAgentName, editingSessionAgent2Name, editingSessionAgentEditorName, editingSessionAgentName, editorAgentName, editsAgentName, getChatParticipantIdFromName, terminalAgentName, vscodeAgentName, workspaceAgentName } from '../../../platform/chat/common/chatAgents';
+import { IChatAgentService, defaultAgentName, editingSessionAgent2Name, editingSessionAgentEditorName, editingSessionAgentName, editorAgentName, editsAgentName, getChatParticipantIdFromName, notebookEditorAgentName, terminalAgentName, vscodeAgentName, workspaceAgentName } from '../../../platform/chat/common/chatAgents';
 import { IChatQuotaService } from '../../../platform/chat/common/chatQuotaService';
 import { IInteractionService } from '../../../platform/chat/common/interactionService';
 import { ConfigKey, IConfigurationService } from '../../../platform/configuration/common/configurationService';
@@ -81,6 +81,7 @@ class ChatAgents implements IDisposable {
 		this._disposables.add(this.registerEditingAgentEditor());
 		this._disposables.add(this.registerEditsAgent());
 		this._disposables.add(this.registerEditorDefaultAgent());
+		this._disposables.add(this.registerNotebookEditorDefaultAgent());
 		this._disposables.add(this.registerNotebookDefaultAgent());
 		this._disposables.add(this.registerWorkspaceAgent());
 		this._disposables.add(this.registerVSCodeAgent());
@@ -165,6 +166,7 @@ class ChatAgents implements IDisposable {
 		const editingAgent = this.createAgent(editingSessionAgentName, Intent.Edit);
 		editingAgent.iconPath = new vscode.ThemeIcon('copilot');
 		editingAgent.additionalWelcomeMessage = this.additionalWelcomeMessage;
+		editingAgent.titleProvider = this.instantiationService.createInstance(ChatTitleProvider);
 		return editingAgent;
 	}
 
@@ -179,6 +181,7 @@ class ChatAgents implements IDisposable {
 		const editingAgent = this.createAgent(editingSessionAgent2Name, Intent.Edit2);
 		editingAgent.iconPath = new vscode.ThemeIcon('copilot');
 		editingAgent.additionalWelcomeMessage = this.additionalWelcomeMessage;
+		editingAgent.titleProvider = this.instantiationService.createInstance(ChatTitleProvider);
 		return editingAgent;
 	}
 
@@ -186,12 +189,13 @@ class ChatAgents implements IDisposable {
 		const editingAgent = this.createAgent(editsAgentName, Intent.Agent);
 		editingAgent.iconPath = new vscode.ThemeIcon('tools');
 		editingAgent.additionalWelcomeMessage = this.additionalWelcomeMessage;
+		editingAgent.titleProvider = this.instantiationService.createInstance(ChatTitleProvider);
 		return editingAgent;
 	}
 
 	private registerDefaultAgent(): IDisposable {
 		const intentGetter = (request: vscode.ChatRequest) => {
-			if (this.configurationService.getExperimentBasedConfig(ConfigKey.Internal.AskAgent, this.experimentationService) && request.model.capabilities.supportsToolCalling) {
+			if (this.configurationService.getExperimentBasedConfig(ConfigKey.Internal.AskAgent, this.experimentationService) && request.model.capabilities.supportsToolCalling && this.configurationService.getNonExtensionConfig('chat.agent.enabled')) {
 				return Intent.AskAgent;
 			}
 			return Intent.Unknown;
@@ -232,8 +236,15 @@ Learn more about [GitHub Copilot](https://docs.github.com/copilot/using-github-c
 		return defaultAgent;
 	}
 
-	private registerNotebookDefaultAgent(): IDisposable {
+	private registerNotebookEditorDefaultAgent(): IDisposable {
 		const defaultAgent = this.createAgent('notebook', Intent.Editor);
+		defaultAgent.iconPath = new vscode.ThemeIcon('copilot');
+
+		return defaultAgent;
+	}
+
+	private registerNotebookDefaultAgent(): IDisposable {
+		const defaultAgent = this.createAgent(notebookEditorAgentName, Intent.notebookEditor);
 		defaultAgent.iconPath = new vscode.ThemeIcon('copilot');
 
 		return defaultAgent;
