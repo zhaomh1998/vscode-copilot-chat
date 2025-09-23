@@ -9,16 +9,16 @@ import { TokenizerType } from '../../../util/common/tokenizer';
 import { IInstantiationService } from '../../../util/vs/platform/instantiation/common/instantiation';
 import { IAuthenticationService } from '../../authentication/common/authentication';
 import { IChatMLFetcher } from '../../chat/common/chatMLFetcher';
-import { ConfigKey, IConfigurationService } from '../../configuration/common/configurationService';
+import { CHAT_MODEL, ConfigKey, IConfigurationService } from '../../configuration/common/configurationService';
 import { IEnvService } from '../../env/common/envService';
 import { IFetcherService } from '../../networking/common/fetcherService';
 import { IExperimentationService } from '../../telemetry/common/nullExperimentationService';
-import { IThinkingDataService } from '../../thinking/node/thinkingDataService';
 import { ITokenizerProvider } from '../../tokenizer/node/tokenizer';
 import { ICAPIClientService } from '../common/capiClient';
 import { IDomainService } from '../common/domainService';
 import { IChatModelInformation } from '../common/endpointProvider';
 import { ChatEndpoint } from './chatEndpoint';
+import { ILogService } from '../../log/common/logService';
 
 export class Proxy4oEndpoint extends ChatEndpoint {
 
@@ -36,9 +36,10 @@ export class Proxy4oEndpoint extends ChatEndpoint {
 		@IInstantiationService instantiationService: IInstantiationService,
 		@IConfigurationService configurationService: IConfigurationService,
 		@IExperimentationService experimentationService: IExperimentationService,
-		@IThinkingDataService thinkingDataService: IThinkingDataService
+		@ILogService logService: ILogService,
 	) {
-		const model = configurationService.getExperimentBasedConfig<string>(ConfigKey.Internal.InstantApplyModelName, experimentationService) ?? 'gpt-4o-instant-apply-full-ft-v66';
+		const model = configurationService.getExperimentBasedConfig<string>(ConfigKey.Internal.InstantApplyModelName, experimentationService) ?? CHAT_MODEL.GPT4OPROXY;
+
 		const modelInfo: IChatModelInformation = {
 			id: model,
 			name: model,
@@ -68,7 +69,9 @@ export class Proxy4oEndpoint extends ChatEndpoint {
 			chatMLFetcher,
 			tokenizerProvider,
 			instantiationService,
-			thinkingDataService,
+			configurationService,
+			experimentationService,
+			logService
 		);
 	}
 

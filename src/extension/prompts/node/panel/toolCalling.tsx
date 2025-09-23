@@ -3,18 +3,26 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { RequestMetadata, RequestType } from '@vscode/copilot-api';
 import { AssistantMessage, BasePromptElementProps, PromptRenderer as BasePromptRenderer, Chunk, IfEmpty, Image, JSONTree, PromptElement, PromptElementProps, PromptMetadata, PromptPiece, PromptSizing, TokenLimit, ToolCall, ToolMessage, useKeepWith, UserMessage } from '@vscode/prompt-tsx';
 import type { ChatParticipantToolToken, LanguageModelToolResult2, LanguageModelToolTokenizationOptions } from 'vscode';
+import { IAuthenticationService } from '../../../../platform/authentication/common/authentication';
+import { ConfigKey, IConfigurationService } from '../../../../platform/configuration/common/configurationService';
+import { modelCanUseMcpResultImageURL } from '../../../../platform/endpoint/common/chatModelCapabilities';
 import { IEndpointProvider } from '../../../../platform/endpoint/common/endpointProvider';
 import { CacheType } from '../../../../platform/endpoint/common/endpointTypes';
+import { StatefulMarkerContainer } from '../../../../platform/endpoint/common/statefulMarkerContainer';
+import { ThinkingDataContainer } from '../../../../platform/endpoint/common/thinkingDataContainer';
+import { IImageService } from '../../../../platform/image/common/imageService';
 import { ILogService } from '../../../../platform/log/common/logService';
+import { IExperimentationService } from '../../../../platform/telemetry/common/nullExperimentationService';
 import { ITelemetryService } from '../../../../platform/telemetry/common/telemetry';
 import { ITokenizer } from '../../../../util/common/tokenizer';
 import { CancellationToken } from '../../../../util/vs/base/common/cancellation';
 import { toErrorMessage } from '../../../../util/vs/base/common/errorMessage';
 import { WebSocketService } from '../../../websocket/node/websocketService';
 import { isCancellationError } from '../../../../util/vs/base/common/errors';
-import { LanguageModelDataPart, LanguageModelPromptTsxPart, LanguageModelTextPart, LanguageModelToolResult } from '../../../../vscodeTypes';
+import { LanguageModelDataPart, LanguageModelDataPart2, LanguageModelPartAudience, LanguageModelPromptTsxPart, LanguageModelTextPart, LanguageModelTextPart2, LanguageModelToolResult } from '../../../../vscodeTypes';
 import { isImageDataPart } from '../../../conversation/common/languageModelChatMessageHelpers';
 import { IResultMetadata } from '../../../prompt/common/conversation';
 import { IBuildPromptContext, IToolCall, IToolCallRound } from '../../../prompt/common/intents';
@@ -45,6 +53,7 @@ export class ChatToolCalls extends PromptElement<ChatToolCallsProps, void> {
 	constructor(
 		props: PromptElementProps<ChatToolCallsProps>,
 		@IToolsService private readonly toolsService: IToolsService,
+		@IPromptEndpoint private readonly promptEndpoint: IPromptEndpoint
 	) {
 		super(props);
 	}
@@ -89,7 +98,16 @@ export class ChatToolCalls extends PromptElement<ChatToolCallsProps, void> {
 			keepWith: useKeepWith(),
 		}));
 		const children: PromptElement[] = [];
-		children.push(<AssistantMessage toolCalls={assistantToolCalls}>{round.response}</AssistantMessage>);
+
+		// Don't include this when rendering and triggering summarization
+		const statefulMarker = round.statefulMarker && <StatefulMarkerContainer statefulMarker={{ modelId: this.promptEndpoint.model, marker: round.statefulMarker }} />;
+		const thinking = round.thinking && <ThinkingDataContainer thinking={round.thinking} />;
+		children.push(
+			<AssistantMessage toolCalls={assistantToolCalls}>
+				{statefulMarker}
+				{thinking}
+				{round.response}
+			</AssistantMessage>);
 
 		// Tool call elements should be rendered with the later elements first, allowed to grow to fill the available space
 		// Each tool 'reserves' 1/(N*4) of the available space just so that newer tool calls don't completely elimate
@@ -222,7 +240,7 @@ class ToolResultElement extends PromptElement<ToolResultElementProps, void> {
 					} else {
 						outcome = outcome === ToolInvocationOutcome.DisabledByUser ? outcome : ToolInvocationOutcome.Error;
 						extraMetadata.push(new ToolFailureEncountered(this.props.toolCall.id));
-						this.logService.logger.error(`Error from tool ${this.props.toolCall.name} with args ${this.props.toolCall.arguments}`, toErrorMessage(err, true));
+						this.logService.error(`Error from tool ${this.props.toolCall.name} with args ${this.props.toolCall.arguments}`, toErrorMessage(err, true));
 					}
 				}
 			}
@@ -312,10 +330,25 @@ enum ToolInvocationOutcome {
 	Cancelled = 'cancelled',
 }
 
-export function imageDataPartToTSX(part: LanguageModelDataPart) {
+export async function imageDataPartToTSX(part: LanguageModelDataPart, githubToken?: string, urlOrRequestMetadata?: string | RequestMetadata, logService?: ILogService, imageService?: IImageService) {
 	if (isImageDataPart(part)) {
 		const base64 = Buffer.from(part.data).toString('base64');
-		return <Image src={`data:${part.mimeType};base64,${base64}`} />;
+		let imageSource = `data:${part.mimeType};base64,${base64}`;
+		const isChatCompletions = typeof urlOrRequestMetadata !== 'string' && urlOrRequestMetadata?.type === RequestType.ChatCompletions;
+		if (githubToken && isChatCompletions && imageService) {
+			try {
+				const uri = await imageService.uploadChatImageAttachment(part.data, 'tool-result-image', part.mimeType ?? 'image/png', githubToken);
+				if (uri) {
+					imageSource = uri.toString();
+				}
+			} catch (error) {
+				if (logService) {
+					logService.warn(`Image upload failed, using base64 fallback: ${error}`);
+				}
+			}
+		}
+
+		return <Image src={imageSource} />;
 	}
 }
 
@@ -355,11 +388,24 @@ interface IPrimitiveToolResultProps extends BasePromptElementProps {
 }
 
 class PrimitiveToolResult<T extends IPrimitiveToolResultProps> extends PromptElement<T> {
+
+	constructor(
+		props: T,
+		@IPromptEndpoint protected readonly endpoint: IPromptEndpoint,
+		@IAuthenticationService private readonly authService: IAuthenticationService,
+		@ILogService private readonly logService?: ILogService,
+		@IImageService private readonly imageService?: IImageService,
+		@IConfigurationService private readonly configurationService?: IConfigurationService,
+		@IExperimentationService private readonly experimentationService?: IExperimentationService
+	) {
+		super(props);
+	}
+
 	async render(): Promise<PromptPiece | undefined> {
 		return (
 			<>
 				<IfEmpty alt='(empty)'>
-					{await Promise.all(this.props.content.map(async part => {
+					{await Promise.all(this.props.content.filter(part => this.hasAssistantAudience(part)).map(async part => {
 						if (part instanceof LanguageModelTextPart) {
 							return await this.onText(part.value);
 						} else if (part instanceof LanguageModelPromptTsxPart) {
@@ -373,8 +419,26 @@ class PrimitiveToolResult<T extends IPrimitiveToolResultProps> extends PromptEle
 		);
 	}
 
-	protected onData(part: LanguageModelDataPart) {
-		return Promise.resolve(imageDataPartToTSX(part));
+	private hasAssistantAudience(part: LanguageModelTextPart2 | LanguageModelPromptTsxPart | LanguageModelDataPart2 | unknown): boolean {
+		if (part instanceof LanguageModelPromptTsxPart) {
+			return true;
+		}
+		if (!(part instanceof LanguageModelDataPart2 || part instanceof LanguageModelTextPart2) || !part.audience) {
+			return true;
+		}
+		return part.audience.includes(LanguageModelPartAudience.Assistant);
+	}
+
+	protected async onData(part: LanguageModelDataPart) {
+		const githubToken = (await this.authService.getAnyGitHubSession())?.accessToken;
+		const uploadsEnabled = this.configurationService && this.experimentationService
+			? this.configurationService.getExperimentBasedConfig(ConfigKey.Internal.EnableChatImageUpload, this.experimentationService)
+			: false;
+
+		// Anthropic (from CAPI) currently does not support image uploads from tool calls.
+		const effectiveToken = uploadsEnabled && modelCanUseMcpResultImageURL(this.endpoint) ? githubToken : undefined;
+
+		return Promise.resolve(imageDataPartToTSX(part, effectiveToken, this.endpoint.urlOrRequestMetadata, this.logService, this.imageService));
 	}
 
 	protected onTSX(part: JSONTree.PromptElementJSON) {
@@ -401,9 +465,14 @@ export interface IToolResultProps extends IPrimitiveToolResultProps {
 export class ToolResult extends PrimitiveToolResult<IToolResultProps> {
 	constructor(
 		props: PromptElementProps<IToolResultProps>,
-		@IPromptEndpoint private readonly endpoint: IPromptEndpoint,
+		@IPromptEndpoint endpoint: IPromptEndpoint,
+		@IAuthenticationService authService: IAuthenticationService,
+		@ILogService logService: ILogService,
+		@IImageService imageService: IImageService,
+		@IConfigurationService configurationService: IConfigurationService,
+		@IExperimentationService experimentationService: IExperimentationService
 	) {
-		super(props);
+		super(props, endpoint, authService, logService, imageService, configurationService, experimentationService);
 	}
 
 	protected override async onTSX(part: JSONTree.PromptElementJSON): Promise<any> {

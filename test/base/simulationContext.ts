@@ -4,7 +4,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import path from 'path';
-import type { Memento } from 'vscode';
 import { ApiEmbeddingsIndex, IApiEmbeddingsIndex } from '../../src/extension/context/node/resolvers/extensionApi';
 import { ConversationStore, IConversationStore } from '../../src/extension/conversationStore/node/conversationStore';
 import { IIntentService, IntentService } from '../../src/extension/intents/node/intentService';
@@ -19,7 +18,7 @@ import { IChunkingEndpointClient } from '../../src/platform/chunking/common/chun
 import { ChunkingEndpointClientImpl } from '../../src/platform/chunking/common/chunkingEndpointClientImpl';
 import { INaiveChunkingService, NaiveChunkingService } from '../../src/platform/chunking/node/naiveChunkerService';
 import { CHAT_MODEL, Config, ConfigKey, ExperimentBasedConfig, ExperimentBasedConfigType, globalConfigRegistry, IConfigurationService } from '../../src/platform/configuration/common/configurationService';
-import { DefaultsOnlyConfigurationService } from '../../src/platform/configuration/test/common/defaultsOnlyConfigurationService';
+import { DefaultsOnlyConfigurationService } from '../../src/platform/configuration/common/defaultsOnlyConfigurationService';
 import { InMemoryConfigurationService } from '../../src/platform/configuration/test/common/inMemoryConfigurationService';
 import { IEmbeddingsComputer } from '../../src/platform/embeddings/common/embeddingsComputer';
 import { RemoteEmbeddingsComputer } from '../../src/platform/embeddings/common/remoteEmbeddingsComputer';
@@ -48,7 +47,6 @@ import { SyncDescriptor } from '../../src/util/vs/platform/instantiation/common/
 import { IJSONOutputPrinter, NoopJSONOutputPrinter } from '../jsonOutputPrinter';
 import { SIMULATION_FOLDER_NAME } from '../simulation/shared/sharedTypes';
 import { ITestInformation, TestInformation } from '../simulation/testInformation';
-import { SQLiteCache } from './cache';
 import { CachedTestInfo, CachingChatMLFetcher, IChatMLCache } from './cachingChatMLFetcher';
 import { CachingChunkingEndpointClient, ChunkingEndpointClientSQLiteCache } from './cachingChunksEndpointClient';
 import { CachingCodeOrDocSearchClient, CodeOrDocSearchSQLiteCache } from './cachingCodeSearchClient';
@@ -137,8 +135,8 @@ export interface SimulationServicesOptions {
 	chatModelThrottlingTaskLaunchers: ChatModelThrottlingTaskLaunchers;
 	isNoFetchModeEnabled: boolean;
 	languageModelCacheMode: CacheMode;
-	chatMLCache?: IChatMLCache;
-	nesFetchCache?: ICompletionsCache;
+	createChatMLCache?: (info: CurrentTestRunInfo) => IChatMLCache;
+	createNesFetchCache?: (info: CurrentTestRunInfo) => ICompletionsCache;
 	resourcesCacheMode: CacheMode;
 	disabledTools: Set<string>;
 	swebenchPrompt: boolean;
@@ -169,29 +167,6 @@ export interface CurrentTestRunInfo {
 	isInRealExtensionHost: boolean;
 }
 
-export class RedisMemento implements Memento {
-
-	constructor(
-		private vscodeVersion: string,
-		private state: Record<string, any>,
-		private cache: SQLiteCache<{ hash: string }, string>
-	) { }
-
-	get(key: string, defaultValue?: any): any {
-		return this.state[key] ?? defaultValue;
-	}
-
-	keys(): string[] {
-		return Object.keys(this.state);
-	}
-
-	async update(key: string, value: any): Promise<void> {
-		this.state[key] = value;
-		this.cache.set({ hash: this.vscodeVersion }, JSON.stringify(this.state));
-		return Promise.resolve();
-	}
-}
-
 /**
  * Creates an accessor suitable for running tests.
  * The `IChatMLFetcher` will use caching and the chat endpoint is configurable via the `chatModel` parameter.
@@ -202,7 +177,7 @@ export async function createSimulationAccessor(
 	opts: SimulationServicesOptions,
 	currentTestRunInfo: CurrentTestRunInfo
 ): Promise<TestingServiceCollection> {
-	const testingServiceCollection = createExtensionUnitTestingServices(modelConfig);
+	const testingServiceCollection = createExtensionUnitTestingServices(currentTestRunInfo, modelConfig);
 	if (currentTestRunInfo.isInRealExtensionHost) {
 		const { addExtensionHostSimulationServices } = await import('./extHostContext/simulationExtHostContext');
 		await addExtensionHostSimulationServices(testingServiceCollection);
@@ -240,7 +215,7 @@ export async function createSimulationAccessor(
 
 	testingServiceCollection.define(ISimulationEndpointHealth, new SyncDescriptor(SimulationEndpointHealthImpl));
 	testingServiceCollection.define(IJSONOutputPrinter, new SyncDescriptor(NoopJSONOutputPrinter));
-	testingServiceCollection.define(ICachingResourceFetcher, new SyncDescriptor(CachingResourceFetcher, [opts.resourcesCacheMode]));
+	testingServiceCollection.define(ICachingResourceFetcher, new SyncDescriptor(CachingResourceFetcher, [currentTestRunInfo, opts.resourcesCacheMode]));
 	testingServiceCollection.define(IVSCodeExtensionContext, new SyncDescriptor(MockExtensionContext, [globalStoragePath, constructGlobalStateMemento(globalStatePath)]));
 	testingServiceCollection.define(IIntentService, new SyncDescriptor(IntentService));
 
@@ -258,10 +233,10 @@ export async function createSimulationAccessor(
 				new SyncDescriptor(ChatMLFetcherImpl),
 				opts.chatModelThrottlingTaskLaunchers
 			]);
-	if (opts.chatMLCache) {
+	if (opts.createChatMLCache) {
 		chatMLFetcher = new SyncDescriptor(CachingChatMLFetcher, [
 			chatMLFetcher,
-			opts.chatMLCache,
+			opts.createChatMLCache(currentTestRunInfo),
 			cacheTestInfo,
 			{ endpointVersion: 'CAPI' },
 			opts.languageModelCacheMode ?? CacheMode.Default
@@ -273,13 +248,13 @@ export async function createSimulationAccessor(
 
 	testingServiceCollection.define(IChatMLFetcher, chatMLFetcher);
 
-	if (opts.nesFetchCache === undefined || cacheTestInfo === undefined) {
+	if (opts.createNesFetchCache === undefined || cacheTestInfo === undefined) {
 		testingServiceCollection.define(ICompletionsFetchService, new SyncDescriptor(CompletionsFetchService));
 	} else {
 		testingServiceCollection.define(ICompletionsFetchService, new SyncDescriptor(
 			CachingCompletionsFetchService,
 			[
-				opts.nesFetchCache,
+				opts.createNesFetchCache(currentTestRunInfo),
 				cacheTestInfo,
 				opts.languageModelCacheMode ?? CacheMode.Default,
 				currentTestRunInfo.fetchRequestCollector,
@@ -296,11 +271,11 @@ export async function createSimulationAccessor(
 		testingServiceCollection.define(IApiEmbeddingsIndex, new SyncDescriptor(ApiEmbeddingsIndex, [/*useRemoteCache*/ true]));
 		testingServiceCollection.define(IProjectTemplatesIndex, new SyncDescriptor(ProjectTemplatesIndex, [/*useRemoteCache*/ true]));
 	} else {
-		const embeddingCache = new EmbeddingsSQLiteCache(TestingCacheSalts.embeddingsCacheSalt);
+		const embeddingCache = new EmbeddingsSQLiteCache(TestingCacheSalts.embeddingsCacheSalt, currentTestRunInfo);
 		testingServiceCollection.define(IEmbeddingsComputer, new SyncDescriptor(CachingEmbeddingsComputer, [embeddingCache]));
 
-		const codeOrDocSearchCache = new CodeOrDocSearchSQLiteCache(TestingCacheSalts.codeSearchCacheSalt);
-		const chunksEndpointCache = new ChunkingEndpointClientSQLiteCache(TestingCacheSalts.chunksEndpointCacheSalt);
+		const codeOrDocSearchCache = new CodeOrDocSearchSQLiteCache(TestingCacheSalts.codeSearchCacheSalt, currentTestRunInfo);
+		const chunksEndpointCache = new ChunkingEndpointClientSQLiteCache(TestingCacheSalts.chunksEndpointCacheSalt, currentTestRunInfo);
 		testingServiceCollection.define(IDocsSearchClient, new SyncDescriptor(CachingCodeOrDocSearchClient, [docsSearchClient, codeOrDocSearchCache]));
 		testingServiceCollection.define(ICombinedEmbeddingIndex, new SyncDescriptor(VSCodeCombinedIndexImpl, [/*useRemoteCache*/ false]));
 		testingServiceCollection.define(IApiEmbeddingsIndex, new SyncDescriptor(ApiEmbeddingsIndex, [/*useRemoteCache*/ false]));

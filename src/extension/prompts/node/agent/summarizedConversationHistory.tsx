@@ -36,7 +36,7 @@ import { WebSocketService } from '../../../websocket/node/websocketService';
 import { renderPromptElement } from '../base/promptRenderer';
 import { Tag } from '../base/tag';
 import { ChatToolCalls } from '../panel/toolCalling';
-import { AgentPrompt, AgentPromptProps, AgentUserMessage, getKeepGoingReminder, getUserMessagePropsFromAgentProps, getUserMessagePropsFromTurn } from './agentPrompt';
+import { AgentPrompt, AgentPromptProps, AgentUserMessage, getUserMessagePropsFromAgentProps, getUserMessagePropsFromTurn, KeepGoingReminder } from './agentPrompt';
 import { SimpleSummarizedHistory } from './simpleSummarizedHistoryPrompt';
 
 export interface ConversationHistorySummarizationPromptProps extends SummarizedAgentHistoryProps {
@@ -182,7 +182,7 @@ class WorkingNotebookSummary extends PromptElement<NotebookSummaryProps> {
 		return (
 			<UserMessage>
 				This is the current state of the notebook that you have been working on:<br />
-				<NotebookSummary notebook={this.props.notebook} />
+				<NotebookSummary notebook={this.props.notebook} includeCellLines={false} altDoc={undefined} />
 			</UserMessage>
 		);
 	}
@@ -441,7 +441,7 @@ class ConversationHistorySummarizer {
 	}
 
 	private logInfo(message: string, mode: SummaryMode): void {
-		this.logService.logger.info(`[ConversationHistorySummarizer] [${mode}] ${message}`);
+		this.logService.info(`[ConversationHistorySummarizer] [${mode}] ${message}`);
 	}
 
 	private async getSummary(mode: SummaryMode, propsInfo: ISummarizedConversationHistoryInfo): Promise<FetchSuccess<string>> {
@@ -488,7 +488,7 @@ class ConversationHistorySummarizer {
 						}, type: 'function'
 					})),
 					(tool, rule) => {
-						this.logService.logger.warn(`Tool ${tool} failed validation: ${rule}`);
+						this.logService.warn(`Tool ${tool} failed validation: ${rule}`);
 					},
 				),
 			} : undefined;
@@ -618,13 +618,13 @@ class ConversationHistorySummarizer {
 			hasWorkingNotebook,
 			duration: elapsedTime,
 			promptTokenCount: usage?.prompt_tokens,
-			promptCacheTokenCount: usage?.prompt_tokens_details.cached_tokens,
+			promptCacheTokenCount: usage?.prompt_tokens_details?.cached_tokens,
 			responseTokenCount: usage?.completion_tokens,
 		});
 	}
 }
 
-export class AgentPromptWithSummaryPrompt extends PromptElement<AgentPromptProps> {
+class AgentPromptWithSummaryPrompt extends PromptElement<AgentPromptProps> {
 	override async render(state: void, sizing: PromptSizing) {
 		return <>
 			<AgentPrompt {...this.props} />
@@ -723,13 +723,12 @@ interface SummaryMessageProps extends BasePromptElementProps {
 
 class SummaryMessageElement extends PromptElement<SummaryMessageProps> {
 	override async render(state: void, sizing: PromptSizing) {
-		const keepGoingReminder = getKeepGoingReminder(this.props.endpoint.family);
 		return <UserMessage>
 			<Tag name='conversation-summary'>
 				{this.props.summaryText}
 			</Tag>
-			{keepGoingReminder && <Tag name='reminderInstructions'>
-				{keepGoingReminder}
+			{this.props.endpoint.family === 'gpt-4.1' && <Tag name='reminderInstructions'>
+				<KeepGoingReminder modelFamily={this.props.endpoint.family} />
 			</Tag>}
 		</UserMessage>;
 	}

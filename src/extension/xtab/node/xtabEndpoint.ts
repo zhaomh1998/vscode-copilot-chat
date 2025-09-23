@@ -11,9 +11,10 @@ import { IDomainService } from '../../../platform/endpoint/common/domainService'
 import { IChatModelInformation } from '../../../platform/endpoint/common/endpointProvider';
 import { ChatEndpoint } from '../../../platform/endpoint/node/chatEndpoint';
 import { IEnvService } from '../../../platform/env/common/envService';
+import { ILogService } from '../../../platform/log/common/logService';
 import { IFetcherService } from '../../../platform/networking/common/fetcherService';
+import { IExperimentationService } from '../../../platform/telemetry/common/nullExperimentationService';
 import { ITelemetryService } from '../../../platform/telemetry/common/telemetry';
-import { IThinkingDataService } from '../../../platform/thinking/node/thinkingDataService';
 import { ITokenizerProvider } from '../../../platform/tokenizer/node/tokenizer';
 import { TokenizerType } from '../../../util/common/tokenizer';
 import { IInstantiationService } from '../../../util/vs/platform/instantiation/common/instantiation';
@@ -49,6 +50,7 @@ export class XtabEndpoint extends ChatEndpoint {
 	constructor(
 		private readonly _url: string,
 		private readonly _apiKey: string,
+		_configuredModelName: string | undefined,
 		@IConfigurationService private readonly _configService: IConfigurationService,
 		@IDomainService _domainService: IDomainService,
 		@IFetcherService _fetcherService: IFetcherService,
@@ -59,10 +61,12 @@ export class XtabEndpoint extends ChatEndpoint {
 		@IChatMLFetcher _chatMLFetcher: IChatMLFetcher,
 		@ITokenizerProvider _tokenizerProvider: ITokenizerProvider,
 		@IInstantiationService _instantiationService: IInstantiationService,
-		@IThinkingDataService _thinkingDataService: IThinkingDataService
+		@IExperimentationService _experimentationService: IExperimentationService,
+		@ILogService _logService: ILogService
 	) {
+		const chatModelInfo = _configuredModelName ? { ...XtabEndpoint.chatModelInfo, id: _configuredModelName } : XtabEndpoint.chatModelInfo;
 		super(
-			XtabEndpoint.chatModelInfo,
+			chatModelInfo,
 			_domainService,
 			_capiClientService,
 			_fetcherService,
@@ -72,7 +76,9 @@ export class XtabEndpoint extends ChatEndpoint {
 			_chatMLFetcher,
 			_tokenizerProvider,
 			_instantiationService,
-			_thinkingDataService
+			_configService,
+			_experimentationService,
+			_logService
 		);
 	}
 
@@ -89,6 +95,7 @@ export class XtabEndpoint extends ChatEndpoint {
 			throw new Error(message);
 		}
 		return {
+			'Authorization': `Bearer ${apiKey}`,
 			'api-key': apiKey,
 		};
 	}

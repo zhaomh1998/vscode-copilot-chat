@@ -81,7 +81,7 @@ class RequestRateLimiter extends Disposable {
 	) {
 		super();
 
-		this._maxParallelChunksRequests = experimentationService.getTreatmentVariable<number>('vscode', 'workspace.embeddingIndex.maxParallelChunksRequests') ?? 8;
+		this._maxParallelChunksRequests = experimentationService.getTreatmentVariable<number>('workspace.embeddingIndex.maxParallelChunksRequests') ?? 8;
 	}
 
 	public enqueue(task: RequestTask, token: CancellationToken): Promise<Response> {
@@ -382,7 +382,7 @@ export class ChunkingEndpointClientImpl extends Disposable implements IChunkingE
 
 			const response = await raceCancellationError(this._requestLimiter.enqueue(makeRequest, token), token);
 			if (!response.ok) {
-				this._logService.logger.debug(`Error chunking '${content.uri}'. Status: ${response.status}. Status Text: ${response.statusText}.`);
+				this._logService.debug(`Error chunking '${content.uri}'. Status: ${response.status}. Status Text: ${response.statusText}.`);
 
 				/* __GDPR__
 					"workspaceChunkEmbeddingsIndex.computeChunksAndEmbeddings.error" : {
@@ -457,7 +457,7 @@ export class ChunkingEndpointClientImpl extends Disposable implements IChunkingE
 			}));
 
 		} catch (e) {
-			this._logService.logger.error(e);
+			this._logService.error(e);
 			return undefined;
 		}
 	}

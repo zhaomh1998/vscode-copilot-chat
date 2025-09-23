@@ -3,13 +3,24 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { LanguageModelChat } from 'vscode';
+import { t } from '@vscode/l10n';
+import { homedir } from 'os';
+import type { LanguageModelChat, PreparedToolInvocation } from 'vscode';
+import { IConfigurationService } from '../../../platform/configuration/common/configurationService';
+import { ICustomInstructionsService } from '../../../platform/customInstructions/common/customInstructionsService';
+import { OffsetLineColumnConverter } from '../../../platform/editing/common/offsetLineColumnConverter';
 import { TextDocumentSnapshot } from '../../../platform/editing/common/textDocumentSnapshot';
 import { IAlternativeNotebookContentService } from '../../../platform/notebook/common/alternativeContent';
 import { INotebookService } from '../../../platform/notebook/common/notebookService';
 import { IWorkspaceService } from '../../../platform/workspace/common/workspaceService';
+import * as glob from '../../../util/vs/base/common/glob';
+import { ResourceMap } from '../../../util/vs/base/common/map';
+import { isWindows } from '../../../util/vs/base/common/platform';
+import { normalizePath, relativePath } from '../../../util/vs/base/common/resources';
 import { URI } from '../../../util/vs/base/common/uri';
-import { EndOfLine, Position, Range, WorkspaceEdit } from '../../../vscodeTypes';
+import { Position as EditorPosition } from '../../../util/vs/editor/common/core/position';
+import { ServicesAccessor } from '../../../util/vs/platform/instantiation/common/instantiation';
+import { EndOfLine, MarkdownString, Position, Range, TextEdit } from '../../../vscodeTypes';
 
 // Simplified Hunk type for the patch
 interface Hunk {
@@ -107,20 +118,27 @@ function calculateSimilarity(str1: string, str2: string): number {
 	return 1 - distance / maxLength;
 }
 
-/**
- * Interface for match result with additional information
- */
-interface MatchResult {
+interface MatchResultCommon {
+	type: string;
+	/** Replacement text */
 	text: string;
-	type: 'exact' | 'fuzzy' | 'whitespace' | 'similarity' | 'multiple' | 'none';
-	editPosition: number[] | undefined;
-	matchInfo?: {
-		strategy: string;
-		matchPositions?: number[];
-		similarity?: number;
-		suggestion?: string;
-	};
+	/** Array of [startIndex, endIndex] to replace in the file content */
+	editPosition: [number, number][];
+	/** Model suggestion to correct a fialing match */
+	suggestion?: string;
 }
+
+/**
+ * Type-safe union type for match results with discriminated unions
+ */
+type MatchResult = MatchResultCommon & (
+	| { text: string; type: 'none'; suggestion?: string }
+	| { text: string; type: 'exact' }
+	| { text: string; type: 'fuzzy' }
+	| { text: string; type: 'whitespace' }
+	| { text: string; type: 'similarity'; suggestion: string; similarity: number }
+	| { text: string; type: 'multiple'; suggestion: string; matchPositions: number[]; strategy: 'exact' | 'fuzzy' | 'whitespace' }
+);
 
 /**
  * Enhanced version of findAndReplaceOne with more robust matching strategies
@@ -131,7 +149,7 @@ interface MatchResult {
  * @param newStr The replacement string
  * @returns An object with the new text, match type, and additional match information
  */
-function findAndReplaceOne(
+export function findAndReplaceOne(
 	text: string,
 	oldStr: string,
 	newStr: string,
@@ -165,11 +183,8 @@ function findAndReplaceOne(
 	return {
 		text,
 		type: 'none',
-		editPosition: undefined,
-		matchInfo: {
-			strategy: 'none',
-			suggestion: `Try making your search string more specific or checking for whitespace/formatting differences.`
-		}
+		editPosition: [],
+		suggestion: `Try making your search string more specific or checking for whitespace/formatting differences.`
 	};
 }
 
@@ -177,101 +192,84 @@ function findAndReplaceOne(
  * Tries to find an exact match of oldStr in text.
  */
 function tryExactMatch(text: string, oldStr: string, newStr: string): MatchResult {
-	const firstExactIdx = text.indexOf(oldStr);
-	if (firstExactIdx !== -1) {
-		// Check for multiple exact occurrences.
-		const secondExactIdx = text.indexOf(oldStr, firstExactIdx + oldStr.length);
-		if (secondExactIdx !== -1) {
-			return {
-				text,
-				type: 'multiple',
-				editPosition: [firstExactIdx, firstExactIdx + oldStr.length],
-				matchInfo: {
-					strategy: 'exact',
-					matchPositions: [firstExactIdx, secondExactIdx],
-					suggestion: "Multiple exact matches found. Make your search string more specific."
-				}
-			};
-		}
-		// Exactly one exact match found.
-		const replaced = text.slice(0, firstExactIdx) + newStr + text.slice(firstExactIdx + oldStr.length);
+	const matchPositions: number[] = [];
+	for (let searchIdx = 0; ;) {
+		const idx = text.indexOf(oldStr, searchIdx);
+		if (idx === -1) { break; }
+		matchPositions.push(idx);
+		searchIdx = idx + oldStr.length;
+	}
+	if (matchPositions.length === 0) {
+		return { text, editPosition: [], type: 'none' };
+	}
+
+	// Check for multiple exact occurrences.
+	if (matchPositions.length > 1) {
 		return {
-			text: replaced,
-			type: 'exact',
-			editPosition: [firstExactIdx, firstExactIdx + oldStr.length],
-			matchInfo: {
-				strategy: 'exact',
-				matchPositions: [firstExactIdx]
-			}
+			text,
+			type: 'multiple',
+			editPosition: matchPositions.map(idx => [idx, idx + oldStr.length]),
+			strategy: 'exact',
+			matchPositions,
+			suggestion: "Multiple exact matches found. Make your search string more specific."
 		};
 	}
-	return { text, editPosition: undefined, type: 'none' };
+	// Exactly one exact match found.
+	const firstExactIdx = matchPositions[0];
+	const replaced = text.slice(0, firstExactIdx) + newStr + text.slice(firstExactIdx + oldStr.length);
+	return {
+		text: replaced,
+		type: 'exact',
+		editPosition: [[firstExactIdx, firstExactIdx + oldStr.length]],
+	};
 }
 
 /**
  * Tries to match using flexible whitespace handling.
  */
 function tryWhitespaceFlexibleMatch(text: string, oldStr: string, newStr: string, eol: string): MatchResult {
-	// Handle trailing newlines for better matching
-	const hasTrailingLF = oldStr.endsWith(eol);
-	if (hasTrailingLF) {
-		oldStr = oldStr.slice(0, -eol.length);
+	const haystack = text.split(eol).map(line => line.trim());
+	const needle = oldStr.trim().split(eol).map(line => line.trim());
+	needle.push(''); // trailing newline to match until the end of a line
+
+	const convert = new OffsetLineColumnConverter(text);
+	const matchedLines: number[] = [];
+	for (let i = 0; i <= haystack.length - needle.length; i++) {
+		if (haystack.slice(i, i + needle.length).join('\n') === needle.join('\n')) {
+			matchedLines.push(i);
+			i += needle.length - 1;
+		}
+	}
+	if (matchedLines.length === 0) {
+		return {
+			text,
+			editPosition: [],
+			type: 'none',
+			suggestion: 'No whitespace-flexible match found.'
+		};
 	}
 
-	// Build a pattern allowing flexible whitespace
-	const lines = oldStr.split(eol);
-	const pattern = lines
-		.map((line, i) => {
-			// Create a pattern that's more flexible with whitespace
-			// Allow any amount of leading whitespace, preserve indentation structure
-			const trimmed = line.trimStart();
-			const leadingSpaces = line.length - trimmed.length;
-			const leadingPattern = leadingSpaces > 0 ? `\\s{0,${leadingSpaces * 2}}` : '';
+	const positions = matchedLines.map(match => convert.positionToOffset(new EditorPosition(match + 1, 1)));
 
-			// Escape the line content for regex safety
-			const escaped = escapeRegex(trimmed);
-
-			// For all lines except the last (or if trailing newline), expect a newline after
-			const lineEnd = i < lines.length - 1 || hasTrailingLF
-				? '[ \\t]*\\r?\\n'
-				: '[ \\t]*';
-
-			return `${leadingPattern}${escaped}${lineEnd}`;
-		})
-		.join('');
-
-	const regex = new RegExp(pattern, 'g');
-
-	const matches = Array.from(text.matchAll(regex));
-	if (matches.length === 0) {
-		return { text, editPosition: undefined, type: 'none' };
-	}
-	if (matches.length > 1) {
+	if (matchedLines.length > 1) {
 		return {
 			text,
 			type: 'multiple',
-			editPosition: undefined,
-			matchInfo: {
-				strategy: 'whitespace',
-				matchPositions: matches.map(match => match.index || 0),
-				suggestion: "Multiple matches found with flexible whitespace. Make your search string more unique."
-			}
+			editPosition: [],
+			matchPositions: positions,
+			suggestion: "Multiple matches found with flexible whitespace. Make your search string more unique.",
+			strategy: 'whitespace',
 		};
 	}
 
 	// Exactly one whitespace-flexible match found
-	const match = matches[0];
-	const startIdx = match.index || 0;
-	const endIdx = startIdx + match[0].length;
-	const replaced = text.slice(0, startIdx) + newStr + text.slice(endIdx);
+	const startIdx = positions[0];
+	const endIdx = convert.positionToOffset(new EditorPosition(matchedLines[0] + 1 + needle.length, 1));
+	const replaced = text.slice(0, startIdx) + newStr + eol + text.slice(endIdx);
 	return {
 		text: replaced,
-		editPosition: [startIdx, endIdx],
+		editPosition: [[startIdx, endIdx]],
 		type: 'whitespace',
-		matchInfo: {
-			strategy: 'whitespace-flexible',
-			matchPositions: [startIdx]
-		}
 	};
 }
 
@@ -300,18 +298,21 @@ function tryFuzzyMatch(text: string, oldStr: string, newStr: string, eol: string
 
 	const matches = Array.from(text.matchAll(regex));
 	if (matches.length === 0) {
-		return { text, editPosition: undefined, type: 'none' };
+		return {
+			text,
+			editPosition: [],
+			type: 'none',
+			suggestion: 'No fuzzy match found.'
+		};
 	}
 	if (matches.length > 1) {
 		return {
 			text,
 			type: 'multiple',
-			editPosition: undefined,
-			matchInfo: {
-				strategy: 'fuzzy',
-				matchPositions: matches.map(match => match.index || 0),
-				suggestion: "Multiple fuzzy matches found. Try including more context in your search string."
-			}
+			editPosition: [],
+			suggestion: "Multiple fuzzy matches found. Try including more context in your search string.",
+			strategy: 'fuzzy',
+			matchPositions: matches.map(match => match.index || 0),
 		};
 	}
 
@@ -323,11 +324,7 @@ function tryFuzzyMatch(text: string, oldStr: string, newStr: string, eol: string
 	return {
 		text: replaced,
 		type: 'fuzzy',
-		editPosition: [startIdx, endIdx],
-		matchInfo: {
-			strategy: 'fuzzy',
-			matchPositions: [startIdx]
-		}
+		editPosition: [[startIdx, endIdx]],
 	};
 }
 
@@ -338,7 +335,7 @@ function tryFuzzyMatch(text: string, oldStr: string, newStr: string, eol: string
 function trySimilarityMatch(text: string, oldStr: string, newStr: string, eol: string, threshold: number = 0.95): MatchResult {
 	// Skip similarity matching for very large strings or too many lines
 	if (oldStr.length > 1000 || oldStr.split(eol).length > 20) {
-		return { text, editPosition: undefined, type: 'none' };
+		return { text, editPosition: [], type: 'none' };
 	}
 
 	const lines = text.split(eol);
@@ -346,7 +343,7 @@ function trySimilarityMatch(text: string, oldStr: string, newStr: string, eol: s
 
 	// Don't try similarity matching for very large files
 	if (lines.length > 1000) {
-		return { text, editPosition: undefined, type: 'none' };
+		return { text, editPosition: [], type: 'none' };
 	}
 
 	let bestMatch = { index: -1, similarity: 0, length: 0 };
@@ -378,17 +375,13 @@ function trySimilarityMatch(text: string, oldStr: string, newStr: string, eol: s
 		return {
 			text: newLines.join(eol),
 			type: 'similarity',
-			editPosition: [startIndex, startIndex + bestMatch.length],
-			matchInfo: {
-				strategy: 'similarity',
-				similarity: bestMatch.similarity,
-				matchPositions: [startIndex],
-				suggestion: `Used similarity matching (${(bestMatch.similarity * 100).toFixed(1)}% similar). Verify the replacement.`
-			}
+			editPosition: [[startIndex, startIndex + bestMatch.length]],
+			similarity: bestMatch.similarity,
+			suggestion: `Used similarity matching (${(bestMatch.similarity * 100).toFixed(1)}% similar). Verify the replacement.`
 		};
 	}
 
-	return { text, editPosition: undefined, type: 'none' };
+	return { text, editPosition: [], type: 'none' };
 }
 
 // Function to generate a simple patch
@@ -408,15 +401,15 @@ export async function applyEdit(
 	uri: URI,
 	old_string: string,
 	new_string: string,
-	workspaceEdit: WorkspaceEdit,
 	workspaceService: IWorkspaceService,
 	notebookService: INotebookService,
 	alternativeNotebookContent: IAlternativeNotebookContentService,
 	languageModel: LanguageModelChat | undefined
 
-): Promise<{ patch: Hunk[]; updatedFile: string }> {
+): Promise<{ patch: Hunk[]; updatedFile: string; edits: TextEdit[] }> {
 	let originalFile: string;
 	let updatedFile: string;
+	const edits: TextEdit[] = [];
 	const filePath = uri.toString();
 
 	try {
@@ -437,7 +430,7 @@ export async function applyEdit(
 			}
 			// Create new file case
 			updatedFile = new_string;
-			workspaceEdit.insert(uri, new Position(0, 0), new_string);
+			edits.push(TextEdit.insert(new Position(0, 0), new_string));
 		} else {
 			// Edit existing file case
 			if (new_string === '') {
@@ -448,19 +441,20 @@ export async function applyEdit(
 					if (!old_string.endsWith(eol) && originalFile.includes(old_string + eol)) {
 						updatedFile = originalFile.replace(old_string + eol, new_string);
 
-						if (result.editPosition) {
-							const range = new Range(document.positionAt(result.editPosition[0]), document.positionAt(result.editPosition[1]));
-							workspaceEdit.delete(uri, range);
+						if (result.editPosition.length) {
+							const [start, end] = result.editPosition[0];
+							const range = new Range(document.positionAt(start), document.positionAt(end));
+							edits.push(TextEdit.delete(range));
 						}
 					} else {
-						const suggestion = result.matchInfo?.suggestion || 'The string to replace must match exactly.';
+						const suggestion = result?.suggestion || 'The string to replace must match exactly.';
 						throw new NoMatchError(
 							`Could not find matching text to replace. ${suggestion}`,
 							filePath
 						);
 					}
 				} else if (result.type === 'multiple') {
-					const suggestion = result.matchInfo?.suggestion || 'Please provide a more specific string.';
+					const suggestion = result?.suggestion || 'Please provide a more specific string.';
 					throw new MultipleMatchesError(
 						`Multiple matches found for the text to replace. ${suggestion}`,
 						filePath
@@ -468,9 +462,10 @@ export async function applyEdit(
 				} else {
 					updatedFile = result.text;
 
-					if (result.editPosition) {
-						const range = new Range(document.positionAt(result.editPosition[0]), document.positionAt(result.editPosition[1]));
-						workspaceEdit.delete(uri, range);
+					if (result.editPosition.length) {
+						const [start, end] = result.editPosition[0];
+						const range = new Range(document.positionAt(start), document.positionAt(end));
+						edits.push(TextEdit.delete(range));
 					}
 				}
 			} else {
@@ -478,13 +473,13 @@ export async function applyEdit(
 				const result = findAndReplaceOne(originalFile, old_string, new_string, eol);
 
 				if (result.type === 'none') {
-					const suggestion = result.matchInfo?.suggestion || 'The string to replace must match exactly or be a valid fuzzy match.';
+					const suggestion = result?.suggestion || 'The string to replace must match exactly or be a valid fuzzy match.';
 					throw new NoMatchError(
 						`Could not find matching text to replace. ${suggestion}`,
 						filePath
 					);
 				} else if (result.type === 'multiple') {
-					const suggestion = result.matchInfo?.suggestion || 'Please provide a more specific string.';
+					const suggestion = result?.suggestion || 'Please provide a more specific string.';
 					throw new MultipleMatchesError(
 						`Multiple matches found for the text to replace. ${suggestion}`,
 						filePath
@@ -492,21 +487,22 @@ export async function applyEdit(
 				} else {
 					updatedFile = result.text;
 
-					if (result.editPosition) {
-						const range = new Range(document.positionAt(result.editPosition[0]), document.positionAt(result.editPosition[1]));
-						workspaceEdit.replace(uri, range, new_string);
+					if (result.editPosition.length) {
+						const [start, end] = result.editPosition[0];
+						const range = new Range(document.positionAt(start), document.positionAt(end));
+						edits.push(TextEdit.replace(range, new_string));
 					}
 
 					// If we used similarity matching, add a warning
-					if (result.type === 'similarity' && result.matchInfo?.similarity) {
-						console.warn(`Used similarity matching with ${(result.matchInfo.similarity * 100).toFixed(1)}% confidence. Verify the result is correct.`);
+					if (result.type === 'similarity' && result?.similarity) {
+						console.warn(`Used similarity matching with ${(result.similarity * 100).toFixed(1)}% confidence. Verify the result is correct.`);
 					}
 				}
 			}
 
 			if (updatedFile === originalFile) {
 				throw new NoChangeError(
-					'Original and edited file match exactly. Failed to apply edit.',
+					'Original and edited file match exactly. Failed to apply edit. Use the ${ToolName.ReadFile} tool to re-read the file and and determine the correct edit.',
 					filePath
 				);
 			}
@@ -519,7 +515,7 @@ export async function applyEdit(
 			newStr: updatedFile,
 		});
 
-		return { patch, updatedFile };
+		return { patch, updatedFile, edits };
 	} catch (error) {
 		// If the file doesn't exist and we're creating a new file with empty oldString
 		if (old_string === '' && error.code === 'ENOENT') {
@@ -532,7 +528,8 @@ export async function applyEdit(
 				newStr: updatedFile,
 			});
 
-			return { patch, updatedFile };
+			edits.push(TextEdit.insert(new Position(0, 0), new_string));
+			return { patch, updatedFile, edits };
 		}
 
 		if (error instanceof EditError) {
@@ -541,4 +538,104 @@ export async function applyEdit(
 			throw new EditError(`Failed to edit file: ${error.message}`, 'unknownError');
 		}
 	}
+}
+
+const ALWAYS_CHECKED_EDIT_PATTERNS: Readonly<Record<string, boolean>> = {
+	'**/.vscode/*.json': false,
+};
+
+// Path prefixes under which confirmation is unconditionally required
+const platformConfirmationRequiredPaths = (
+	isWindows
+		? [process.env.APPDATA + '/**', process.env.LOCALAPPDATA + '/**', homedir() + '/.*', homedir() + '/.*/**']
+		: [homedir() + '/.*', homedir() + '/.*/**']
+).map(p => glob.parse(p));
+
+const enum ConfirmationCheckResult {
+	NoConfirmation,
+	Sensitive,
+	SystemFile,
+	OutsideWorkspace
+}
+
+/**
+ * Returns a function that returns whether a URI is approved for editing without
+ * further user confirmation.
+ */
+function makeUriConfirmationChecker(configuration: IConfigurationService, workspaceService: IWorkspaceService, customInstructionsService: ICustomInstructionsService) {
+	const patterns = configuration.getNonExtensionConfig<Record<string, boolean>>('chat.tools.edits.autoApprove');
+
+	const checks = new ResourceMap<{ pattern: glob.ParsedPattern; isApproved: boolean }[]>();
+	const getPatterns = (wf: URI) => {
+		let arr = checks.get(wf);
+		if (arr) {
+			return arr;
+		}
+
+		arr = [];
+		for (const obj of [patterns, ALWAYS_CHECKED_EDIT_PATTERNS]) {
+			if (obj) {
+				for (const [pattern, isApproved] of Object.entries(obj)) {
+					arr.push({ pattern: glob.parse({ base: wf.fsPath, pattern }), isApproved });
+				}
+			}
+		}
+
+		checks.set(wf, arr);
+		return arr;
+	};
+
+	return (uri: URI) => {
+		uri = normalizePath(uri);
+
+		const workspaceFolder = workspaceService.getWorkspaceFolder(uri);
+		if (!workspaceFolder && !customInstructionsService.isExternalInstructionsFile(uri)) {
+			return ConfirmationCheckResult.OutsideWorkspace;
+		}
+
+		let ok = true;
+		const fsPath = uri.fsPath;
+		if (platformConfirmationRequiredPaths.some(p => p(fsPath))) {
+			return ConfirmationCheckResult.SystemFile;
+		}
+
+		for (const { pattern, isApproved } of getPatterns(workspaceFolder || URI.file('/'))) {
+			if (isApproved !== ok && pattern(fsPath)) {
+				ok = isApproved;
+			}
+		}
+
+		return ok ? ConfirmationCheckResult.NoConfirmation : ConfirmationCheckResult.Sensitive;
+	};
+}
+
+export function createEditConfirmation(accessor: ServicesAccessor, uris: readonly URI[], asString: () => string): PreparedToolInvocation {
+	const checker = makeUriConfirmationChecker(accessor.get(IConfigurationService), accessor.get(IWorkspaceService), accessor.get(ICustomInstructionsService));
+	const needsConfirmation = uris
+		.map(uri => ({ uri, reason: checker(uri) }))
+		.filter(r => r.reason !== ConfirmationCheckResult.NoConfirmation);
+
+	if (!needsConfirmation.length) {
+		return { presentation: 'hidden' };
+	}
+
+	const workspaceService = accessor.get(IWorkspaceService);
+	const fileParts = needsConfirmation.map(({ uri }) => {
+		const wf = workspaceService.getWorkspaceFolder(uri);
+		return '`' + (wf ? relativePath(wf, uri) : uri.fsPath) + '`';
+	}).join(', ');
+
+	return {
+		confirmationMessages: {
+			title: t('Allow edits to sensitive files?'),
+			message: new MarkdownString(
+				(needsConfirmation.some(r => r.reason === ConfirmationCheckResult.Sensitive)
+					? t`The model wants to edit sensitive files (${fileParts}).`
+					: needsConfirmation.some(r => r.reason === ConfirmationCheckResult.OutsideWorkspace)
+						? t`The model wants to edit files outside of your workspace (${fileParts}).`
+						: t`The model wants to edit system files (${fileParts}).`)
+				+ ' ' + t`Do you want to allow this?` + '\n\n' + asString()
+			),
+		}
+	};
 }

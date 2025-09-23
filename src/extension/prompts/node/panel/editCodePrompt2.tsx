@@ -5,7 +5,7 @@
 
 import { PromptElement, PromptSizing, SystemMessage, UserMessage } from '@vscode/prompt-tsx';
 import { ConfigKey, IConfigurationService } from '../../../../platform/configuration/common/configurationService';
-import { modelPrefersInstructionsAfterHistory } from '../../../../platform/endpoint/common/chatModelCapabilities';
+import { modelNeedsStrongReplaceStringHint, modelPrefersInstructionsAfterHistory } from '../../../../platform/endpoint/common/chatModelCapabilities';
 import { IExperimentationService } from '../../../../platform/telemetry/common/nullExperimentationService';
 import { isLocation, isUri } from '../../../../util/common/types';
 import { ToolName } from '../../../tools/common/toolNames';
@@ -124,7 +124,7 @@ export class EditCodePrompt2 extends PromptElement<AgentPromptProps> {
 	}
 }
 
-export class EditCode2UserMessage extends PromptElement<AgentPromptProps> {
+class EditCode2UserMessage extends PromptElement<AgentPromptProps> {
 	constructor(
 		props: AgentPromptProps,
 		@IExperimentationService private readonly experimentationService: IExperimentationService,
@@ -138,6 +138,7 @@ export class EditCode2UserMessage extends PromptElement<AgentPromptProps> {
 		const useProjectLabels = this._configurationService.getExperimentBasedConfig(ConfigKey.Internal.ProjectLabelsChat, this.experimentationService);
 		const hasReplaceStringTool = !!this.props.promptContext.tools?.availableTools.find(tool => tool.name === ToolName.ReplaceString);
 		const hasEditFileTool = !!this.props.promptContext.tools?.availableTools.find(tool => tool.name === ToolName.EditFile);
+		const hasMultiReplaceStringTool = !!this.props.promptContext.tools?.availableTools.find(tool => tool.name === ToolName.MultiReplaceString);
 
 		return (
 			<>
@@ -148,7 +149,7 @@ export class EditCode2UserMessage extends PromptElement<AgentPromptProps> {
 					<ChatToolReferences flexGrow={4} priority={898} promptContext={this.props.promptContext} documentContext={this.props.documentContext} />
 					<ChatVariables flexGrow={3} priority={898} chatVariables={chatVariables} />
 					<Tag name='reminder'>
-						{getEditingReminder(hasEditFileTool, hasReplaceStringTool)}
+						{getEditingReminder(hasEditFileTool, hasReplaceStringTool, modelNeedsStrongReplaceStringHint(this.props.endpoint), hasMultiReplaceStringTool)}
 						<NotebookReminderInstructions chatVariables={chatVariables} query={query} />
 						<NewFilesLocationHint />
 					</Tag>
